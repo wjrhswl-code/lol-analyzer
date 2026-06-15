@@ -6,7 +6,7 @@ export async function GET(req: NextRequest) {
   const gameName = searchParams.get('gameName') || ''
   const tagLine = searchParams.get('tagLine') || ''
   const region = searchParams.get('region') || 'kr'
-  const key = process.env.RIOT_API_KEY || ''
+  const key = process.env.RIOT_API_KEY || ''RGAPI-3109d33a-91e1-4cb5-a302-bc5e9f266112
 
   const platformMap: Record<string, string> = {
     kr: 'asia', jp1: 'asia', na1: 'americas', br1: 'americas',
