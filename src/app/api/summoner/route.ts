@@ -33,9 +33,7 @@ export async function GET(req: NextRequest) {
     const rankedData = await getRankedInfo(summoner.id, region)
     const soloRank = rankedData.find((r: any) => r.queueType === 'RANKED_SOLO_5x5')
     const flexRank = rankedData.find((r: any) => r.queueType === 'RANKED_FLEX_SR')
-
     const matchIds = await getMatchIds(summoner.puuid, region, 20, queue)
-
     const matchDataList = await Promise.allSettled(
       matchIds.map((id: string) => getMatch(id, region))
     )
@@ -43,10 +41,8 @@ export async function GET(req: NextRequest) {
       .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
       .map(r => processMatch(r.value, summoner.puuid))
       .filter(Boolean) as any[]
-
     const masteryData = await getChampionMastery(summoner.puuid, region, 5)
     const overallStats = calcAverageStats(matches)
-
     const champMap: Record<string, any[]> = {}
     for (const m of matches) {
       if (!champMap[m.championName]) champMap[m.championName] = []
@@ -62,15 +58,8 @@ export async function GET(req: NextRequest) {
       }))
       .sort((a, b) => b.games - a.games)
       .slice(0, 8)
-
     return NextResponse.json({
-      summoner,
-      soloRank,
-      flexRank,
-      matches,
-      overallStats,
-      champStats,
-      masteryData,
+      summoner, soloRank, flexRank, matches, overallStats, champStats, masteryData,
     })
   } catch (err: any) {
     console.error('[summoner API error]', err?.response?.data || err.message)
