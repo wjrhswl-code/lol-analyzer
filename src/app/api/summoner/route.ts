@@ -1,90 +1,125 @@
 import { NextRequest, NextResponse } from 'next/server'
 import axios from 'axios'
-import { Region, REGION_TO_PLATFORM, QUEUE_NAMES } from '@/lib/types'
 
-const RIOT_KEY = () => process.env.RIOT_API_KEY || ''
+const PLATFORMS: Record<string, string> = {
+  kr: 'asia', jp1: 'asia', na1: 'americas', br1: 'americas',
+  la1: 'americas', la2: 'americas', euw1: 'europe', eune1: 'europe',
+  tr1: 'europe', ru: 'europe', oc1: 'sea'
+}
 
-function regionUrl(region: Region) { return `https://${region}.api.riotgames.com` }
-function platformUrl(region: Region) { return `https://${REGION_TO_PLATFORM[region].toLowerCase()}.api.riotgames.com` }
-function headers() { return { 'X-Riot-Token': RIOT_KEY() } }
+const QUEUE_NAMES: Record<number, string> = {
+  420: '솔로랭크', 440: '자유랭크', 450: '칼바람', 400: '일반', 430: '일반'
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const gameName = searchParams.get('gameName')
-  const tagLine = searchParams.get('tagLine')
-  const region = (searchParams.get('region') || 'kr') as Region
+  const gameName = searchParams.get('gameName') || ''
+  const tagLine = searchParams.get('tagLine') || ''
+  const region = searchParams.get('region') || 'kr'
+  const platform = PLATFORMS[region] || 'asia'
+  const key = process.env.RIOT_API_KEY || ''
 
-  console.log('RIOT KEY START:', RIOT_KEY().slice(0, 10))
+  console.log('RIOT KEY START:', key.slice(0, 10))
 
   if (!gameName || !tagLine) {
     return NextResponse.json({ error: '소환사명과 태그를 입력해주세요.' }, { status: 400 })
   }
-
-  if (!RIOT_KEY()) {
-    return NextResponse.json({ error: 'RIOT_API_KEY가 없습니다.' }, { status: 500 })
+  if (!key) {
+    return NextResponse.json({ error: 'API 키가 없습니다.' }, { status: 500 })
   }
 
+  const h = { 'X-Riot-Token': key }
+
   try {
-    const acctRes = await axios.get(
-      `${platformUrl(region)}/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`,
-      { headers: headers() }
+    const acct = await axios.get(
+      `https://${platform}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`,
+      { headers: h }
     )
-    const { puuid } = acctRes.data
+    const puuid: string = acct.data.puuid
 
-    const sumRes = await axios.get(
-      `${regionUrl(region)}/lol/summoner/v4/summoners/by-puuid/${puuid}`,
-      { headers: headers() }
+    const sum = await axios.get(
+      `https://${region}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${puuid}`,
+      { headers: h }
     )
-    const summoner = { ...sumRes.data, gameName, tagLine }
+    const summoner = { ...sum.data, gameName, tagLine }
 
-    const rankedRes = await axios.get(
-      `${regionUrl(region)}/lol/league/v4/entries/by-summoner/${summoner.id}`,
-      { headers: headers() }
+    const ranked = await axios.get(
+      `https://${region}.api.riotgames.com/lol/league/v4/entries/by-summoner/${summoner.id}`,
+      { headers: h }
     )
-    const soloRank = rankedRes.data.find((r: any) => r.queueType === 'RANKED_SOLO_5x5')
-    const flexRank = rankedRes.data.find((r: any) => r.queueType === 'RANKED_FLEX_SR')
+    const soloRank = ranked.data.find((r: any) => r.queueType === 'RANKED_SOLO_5x5') || null
+    const flexRank = ranked.data.find((r: any) => r.queueType === 'RANKED_FLEX_SR') || null
 
-    const platform = REGION_TO_PLATFORM[region].toLowerCase()
     const matchIdsRes = await axios.get(
       `https://${platform}.api.riotgames.com/lol/match/v5/matches/by-puuid/${puuid}/ids?count=20`,
-      { headers: headers() }
+      { headers: h }
     )
     const matchIds: string[] = matchIdsRes.data
 
     const matchResults = await Promise.allSettled(
-      matchIds.map(id =>
-        axios.get(`https://${platform}.api.riotgames.com/lol/match/v5/matches/${id}`, { headers: headers() })
+      matchIds.map((id: string) =>
+        axios.get(`https://${platform}.api.riotgames.com/lol/match/v5/matches/${id}`, { headers: h })
       )
     )
 
-    const matches = matchResults
-      .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
-      .map(r => {
-        const info = r.value.data.info
-        const p = info.participants.find((x: any) => x.puuid === puuid)
-        if (!p) return null
-        const dur = info.gameDuration
-        const durMin = dur / 60
-        const cs = p.totalMinionsKilled + p.neutralMinionsKilled
-        const kda = p.deaths === 0 ? p.kills + p.assists : (p.kills + p.assists) / p.deaths
-        const team = info.participants.filter((x: any) => x.teamId === p.teamId)
-        const teamKills = team.reduce((s: number, x: any) => s + x.kills, 0)
-        return {
-          matchId: r.value.data.metadata.matchId,
-          gameCreation: info.gameCreation,
-          gameDuration: dur,
-          queueId: info.queueId,
-          queueName: QUEUE_NAMES[info.queueId] || '기타',
-          win: p.win,
-          championName: p.championName,
-          championId: p.championId,
-          kills: p.kills, deaths: p.deaths, assists: p.assists,
-          kda: Math.round(kda * 100) / 100,
-          cs, csPerMin: Math.round(cs / durMin * 10) / 10,
-          visionScore: p.visionScore,
-          controlWards: p.controlWardsPlaced,
-          damageDealt: p.totalDamageDealtToChampions,
-          damageDealtPerMin: Math.round(p.totalDamageDealtToChampions / durMin),
-          killParticipation: teamKills > 0 ? Math.round((p.kills + p.assists) / teamKills * 100) : 0,
-          items: [p.item0,p.item1,p.item2,p.item3,p.item4,p.item5,p.item6],
-          doubleKills: p.doubleKills, tripleKills: p.tripleKills,
+    const matches: any[] = []
+    for (const r of matchResults) {
+      if (r.status !== 'fulfilled') continue
+      const info = r.value.data.info
+      const p = info.participants.find((x: any) => x.puuid === puuid)
+      if (!p) continue
+      const dur: number = info.gameDuration
+      const durMin: number = dur / 60
+      const cs: number = p.totalMinionsKilled + p.neutralMinionsKilled
+      const kda: number = p.deaths === 0 ? p.kills + p.assists : (p.kills + p.assists) / p.deaths
+      const team: any[] = info.participants.filter((x: any) => x.teamId === p.teamId)
+      const teamKills: number = team.reduce((s: number, x: any) => s + x.kills, 0)
+      matches.push({
+        matchId: r.value.data.metadata.matchId,
+        gameCreation: info.gameCreation,
+        gameDuration: dur,
+        queueId: info.queueId,
+        queueName: QUEUE_NAMES[info.queueId as number] || '기타',
+        win: p.win,
+        championName: p.championName,
+        championId: p.championId,
+        kills: p.kills,
+        deaths: p.deaths,
+        assists: p.assists,
+        kda: Math.round(kda * 100) / 100,
+        cs,
+        csPerMin: Math.round(cs / durMin * 10) / 10,
+        visionScore: p.visionScore,
+        controlWards: p.controlWardsPlaced,
+        damageDealt: p.totalDamageDealtToChampions,
+        damageDealtPerMin: Math.round(p.totalDamageDealtToChampions / durMin),
+        killParticipation: teamKills > 0 ? Math.round((p.kills + p.assists) / teamKills * 100) : 0,
+        items: [p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6],
+        doubleKills: p.doubleKills,
+        tripleKills: p.tripleKills,
+        quadraKills: p.quadraKills,
+        pentaKills: p.pentaKills,
+        lane: p.lane,
+      })
+    }
+
+    const len = matches.length
+    const overallStats = len === 0 ? null : {
+      avgKda: Math.round(matches.reduce((s, m) => s + m.kda, 0) / len * 100) / 100,
+      avgCsPerMin: Math.round(matches.reduce((s, m) => s + m.csPerMin, 0) / len * 10) / 10,
+      avgVision: Math.round(matches.reduce((s, m) => s + m.visionScore, 0) / len),
+      winRate: Math.round(matches.filter(m => m.win).length / len * 100),
+      games: len,
+    }
+
+    return NextResponse.json({ summoner, soloRank, flexRank, matches, overallStats })
+
+  } catch (err: any) {
+    const status: number = err?.response?.status || 500
+    console.error('[API error]', status, err?.response?.data || err.message)
+    if (status === 403) return NextResponse.json({ error: 'API 키가 만료되었거나 유효하지 않습니다.' }, { status: 403 })
+    if (status === 404) return NextResponse.json({ error: '소환사를 찾을 수 없습니다.' }, { status: 404 })
+    if (status === 429) return NextResponse.json({ error: 'API 요청 한도 초과입니다.' }, { status: 429 })
+    return NextResponse.json({ error: '오류가 발생했습니다.' }, { status: 500 })
+  }
+}
