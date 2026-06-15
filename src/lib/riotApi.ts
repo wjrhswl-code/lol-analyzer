@@ -11,7 +11,7 @@ import {
   QUEUE_NAMES,
 } from './types'
 
-const API_KEY = process.env.RIOT_API_KEY
+const API_KEY = process.env['RIOT_API_KEY']
 
 function regionUrl(region: Region) {
   return `https://${region}.api.riotgames.com`
